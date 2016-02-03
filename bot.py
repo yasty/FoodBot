@@ -1,5 +1,5 @@
 #-*- coding: utf-8 -*-
-import time, json, copy, datetime, multiprocessing, requests, re, string, sys
+import time, json, copy, datetime, requests, re, sys
 from slackclient import SlackClient
 from yelpapi import YelpAPI
 from bs4 import BeautifulSoup
