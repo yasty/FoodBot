@@ -1,8 +1,12 @@
 #-*- coding: utf-8 -*-
-import time, json, copy, datetime, requests, re, sys
+#ROPgadget written by salwan, libc fingerprinter, checksec.sh slimm609, libc database niklasb, file (bash file)
+import time, json, copy, datetime, multiprocessing, requests, re, string, sys
 from slackclient import SlackClient
+from subprocess import check_output
 from yelpapi import YelpAPI
 from bs4 import BeautifulSoup
+from random import randint
+import wget
 
 class Choice(object):
     def __init__(self, name=None, url=None, rating=None, img_url = None, categories=None,
@@ -43,6 +47,14 @@ class Choice(object):
         if self.img_url:
             data["thumb_url"] = self.img_url
         return data
+
+#thanks quantumSoup and Rufflewind for saving me 5 minutes http://stackoverflow.com/questions/3431825/generating-a-md5-checksum-of-a-file
+def md5(fname):
+    hash_ = hashlib.md5()
+    with open(fname, "rb") as f:
+        for chunk in iter(lambda: f.read(4096, b""):
+                hash_.update(chunk)
+        return hash_.hexdigest()
 
 def split_msg(msg):
     s = msg.partition(" ")
@@ -176,6 +188,81 @@ def build_fr_term(term, result_numbers=[0]):
         if len(result)==1:
             return result[0]
         return result
+
+
+def bin(sc, data):
+    """usage: !bin <download link>. For giving files to pwnbot when ctfmode is off"""
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            url = (data["data"])[1:-1]
+            print url
+            try:
+                r = wget.download(url)
+                f = open("filelist.txt", "a")
+                f.write(r)
+                md5 = md5(r)
+                f.write(md5)
+                f.close()
+                send_msg("File "+ r + "  downloaded successfully", channel)
+            except:
+                send_msg("Couldn't find a downloadable file", channel)
+
+def delete(sc, data):
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            f = open("filelist.txt", "r")
+            s = f.read()
+            f.close()
+            if data["data"] in s:
+                f = open("filelist.txt", "w")
+                slist = s.split()
+                md5flag = False
+                for fil in slist:
+                    if fil != data["data"] and md5flag == False:
+                        f.write(fil)
+                    else if not md5flag:
+                        md5flag = True
+                    else:
+                        md5flag = False
+
+def ctfmode(sc, data):
+    """ toggle ctfmode which allows creation of public files to pull down files without requiring links"""
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            global ctfmode
+            ctfmode = not ctfmode
+            send_msg("ctfmode is set to " + str(ctfmode), channel)
+         
+def gif(sc, data):
+    """imgur image search"""
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            query = process_text(data["data"])
+            url = "http://imgur.com/search/score?q=" #test+abc+ext%3Agif
+            for word in query.split():
+                url = url + word + "+"
+            url = url + "ext%3Agif"
+            soup = BeautifulSoup((requests.get(url)).text)
+            results = soup.find_all("a", class_="image-list-link")
+            imgurls = []
+            for result in results:
+                r = re.compile('href="/gallery(.*)"')
+                ext = r.search(str(result)).group(1)
+                imgurls.append("https://imgur.com" + ext + ".gif")
+            print query
+            if len(imgurls) == 0:
+                print "no results"
+                send_msg("No results", channel)
+            elif len(imgurls) <= 10 or query == "":
+                print "not enough images, or catchall query"
+                send_msg(imgurls[randint(0, len(imgurls)-1)], channel)
+            else:
+                send_msg(imgurls[randint(0, 10)], channel)
+
 
 def rsvp(sc, data):
     """indicate that you will be attending the event."""
@@ -388,7 +475,7 @@ def source(sc, data):
     if type(data)==type({}):
         if "channel" in data.keys():
             channel = data["channel"]
-            filename = sys.argv[0]
+            filename = __file__
             with open(filename, "rb") as r:
                 response = post_snippet(channel, r, filename, filename)
                 print response
@@ -408,15 +495,15 @@ ATTENDEES = []
 VOTES = {}
 CHOICES = []
 USERS = {}
-USERNAME = "SouperBot"
+USERNAME = "PwnBot"
 LOCATION = "6 Metrotech Ctr, Brooklyn, NY"
 COMMANDS = {"!vote": globals()["vote"], "!rsvp": globals()["rsvp"], "!attendees": globals()["attendees"], "!dersvp": globals()["dersvp"],
         "!choices": globals()["choices"], "!help": globals()["help"], "!show_poll": globals()["show_poll"], "!when": globals()["when"],
-        "!recommend": globals()["recommend"], "!source": globals()["source"]}
+        "!recommend": globals()["recommend"], "!source": globals()["source"], "!gif": globals()["gif"], "!ctfmode": globals()["ctfmode"], "!bin": globals()["bin"]}
 string_types = [type(u""), type("")]
 sc = SlackClient(token)
 yelp = YelpAPI(yck, ycs, ytok, yts)
-
+ctfmode = False
 if sc.rtm_connect():
     cnl = sc.server.channels.find("food-day")
     while True:
@@ -428,13 +515,31 @@ if sc.rtm_connect():
                 read = sc.rtm_read()
         for d in read:
             if ("type" in d.keys()):
-                if d["type"]=="message" and d['channel']==cnl.id and ("subtype" not in d.keys()):
+                if d["type"]=="message" and d['channel']==cnl.id and ("subtype" not in d.keys()) and d["user"] != "U02JZ4EF3":
+                    
                     msg = d["text"]
                     cmd, options = split_msg(msg)
                     user = d["user"]
                     args = {"data": options, "user": user, "channel": cnl.id}
                     if cmd in COMMANDS.keys():
-                        print args
-                        print "Calling {0}".format(cmd)
-                        COMMANDS[cmd](sc, args)
+                        try:
+                            if args["data"] != "":
+                                args["data"].decode('ascii')
+                            print "Calling {0}".format(cmd), "with arguments ", args
+                            COMMANDS[cmd](sc, args)
+                        except UnicodeDecodeError:
+                            print "invalid options"
+                            send_msg("WRONG", args["channel"])
+                if "file" in d and ctfmode == True and d["user"] != "U02JZ4EF3":
+                    public_creator = d['file']['permalink_public']
+                    print "File Found. public link creator: {0}".format(public_creator)
+                    #sc.api_call("files.list"
+                    r = requests.get(public_creator)
+                    loc = (r.content).find('"file_header generic_header" href="')
+                    if loc == "":
+                        loc = (r.content).find('img src="')
+                    dllink = (r.content)[35+loc:200+loc]
+                    dllink = dllink[:dllink.find('">')]
+                    print "public download link: ", dllink
+                    check_output(["wget", dllink])
         time.sleep(0.5)
