@@ -214,10 +214,13 @@ def analyze(sc, data):
             if filename in get_filelist():
                 outstring = ""
                 file_out = check_output(["file", filename])
-                oustring += file_out + "\n---------------------------\n"
+                outstring += file_out + "\n---------------------------\n"
                 filetype = file_out[len(filename)+2:file_out.find(",")]
                 stat_out = check_output(["stat", filename])
-                outstring = stat_out + "\n"
+                outstring += stat_out[:stat_out.find("\nAccess: ")] + "\n---------------------------\n"
+                binwalk_out = check_output(["binwalk", filename])
+                outstring += binwalk_out + "\n"
+
                 send_msg(outstring, channel)
             else:
                 send_msg("File does not exist", channel)
@@ -246,32 +249,37 @@ def rename(sc, data):
 
 #to add: pull down all challenges on a CTF page, add trello integration
 def bin(sc, data):
-    """usage: !bin <download link>. For giving files to pwnbot when ctfmode is off"""
+    """usage: !bin <download link>. For giving files to pwnbot when ctfmode is off. alternative usage: !bin grabnext. creates and download a public link for the next uploaded file."""
     if type(data)==type({}):
         if "channel" in data.keys():
             channel = data["channel"]
             url = (data["data"])[1:-1]
             print url
-            try:
-                r = wget.download(url)
-                md5checksum = hashlib.md5(open(r).read()).hexdigest()
-                rawlist = (open("filelist.txt", "r").read()).split()
-                if md5checksum in rawlist:
-                    raise FileExists()
-                f = open("filelist.txt", "a")
-                f.write(r + "\n")
-                f.write(md5checksum + "\n")
-                f.close()
-                send_msg("File "+ r + "  downloaded successfully", channel)
-                print "File downloaded successfully"
-            except FileExists:
-                print "File already exists"
-                existing = rawlist[rawlist.index(md5checksum)-1]
-                send_msg("File already exists as " + existing, channel)
-                os.remove(r)
-            except:
-                print "couldnt find a downloadable file"
-                send_msg("Couldn't find a downloadable file", channel)
+            if data["data"] == "grabnext":
+                global grabnext
+                grabnext = True
+                send_msg("Downloading next uploaded file", channel)
+            else:
+                try:
+                    r = wget.download(url)
+                    md5checksum = hashlib.md5(open(r).read()).hexdigest()
+                    rawlist = (open("filelist.txt", "r").read()).split()
+                    if md5checksum in rawlist:
+                        raise FileExists()
+                    f = open("filelist.txt", "a")
+                    f.write(r + "\n")
+                    f.write(md5checksum + "\n")
+                    f.close()
+                    send_msg("File "+ r + "  downloaded successfully", channel)
+                    print "File downloaded successfully"
+                except FileExists:
+                    print "File already exists"
+                    existing = rawlist[rawlist.index(md5checksum)-1]
+                    send_msg("File already exists as " + existing, channel)
+                    os.remove(r)
+                except:
+                    print "couldnt find a downloadable file"
+                    send_msg("Couldn't find a downloadable file", channel)
 
 def file_list(sc, data):
     """usage: !filelist. Lists files."""
@@ -598,6 +606,7 @@ string_types = [type(u""), type("")]
 sc = SlackClient(token)
 yelp = YelpAPI(yck, ycs, ytok, yts)
 ctfmode = False
+grabnext = False
 if sc.rtm_connect():
     cnl = sc.server.channels.find("food-day")
     while True:
@@ -609,7 +618,7 @@ if sc.rtm_connect():
                 read = sc.rtm_read()
         for d in read:
             if ("type" in d.keys()):
-                if d["type"]=="message" and d['channel']==cnl.id and ("subtype" not in d.keys()) and d["user"] != "U02JZ4EF3":
+                if d["type"]=="message" and d['channel']==cnl.id and ("subtype" not in d.keys()):    #for if solid is being a cunt: and d["user"] != "U02JZ4EF3":
                     
                     msg = d["text"]
                     cmd, options = split_msg(msg)
@@ -624,7 +633,8 @@ if sc.rtm_connect():
                         except UnicodeDecodeError:
                             print "invalid options"
                             send_msg("WRONG", args["channel"])
-                if "file" in d and ctfmode == True and d["user"] != "U02JZ4EF3":
+                if "file" in d and (ctfmode == True or grabnext == True):# and d["user"] != "U02JZ4EF3":
+                    grabnext = False
                     public_creator = d['file']['permalink_public']
                     print "File Found. public link creator: {0}".format(public_creator)
                     #sc.api_call("files.list"
@@ -635,5 +645,6 @@ if sc.rtm_connect():
                     dllink = (r.content)[35+loc:200+loc]
                     dllink = dllink[:dllink.find('">')]
                     print "public download link: ", dllink
-                    check_output(["wget", dllink])
+                    args = {"data": "<"+dllink+">", "user": "thisstringneedstobehere", "channel": cnl.id}
+                    bin(sc, args)
         time.sleep(0.5)
