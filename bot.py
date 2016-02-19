@@ -1,6 +1,7 @@
 #-*- coding: utf-8 -*-
 #ROPgadget written by salwan, libc fingerprinter, checksec.sh slimm609, libc database niklasb, file (bash file)
-import time, json, copy, datetime, multiprocessing, requests, re, string, sys, wget, hashlib, binascii, os
+#85a471229b705a3cd3db22499a0bc8acc8d8b4fd
+import time, json, copy, datetime, requests, re, wget, hashlib, binascii, os
 from slackclient import SlackClient
 from subprocess import check_output
 from yelpapi import YelpAPI
