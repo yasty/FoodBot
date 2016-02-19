@@ -1,12 +1,11 @@
 #-*- coding: utf-8 -*-
 #ROPgadget written by salwan, libc fingerprinter, checksec.sh slimm609, libc database niklasb, file (bash file)
-import time, json, copy, datetime, multiprocessing, requests, re, string, sys
+import time, json, copy, datetime, multiprocessing, requests, re, string, sys, wget, hashlib, binascii, os
 from slackclient import SlackClient
 from subprocess import check_output
 from yelpapi import YelpAPI
 from bs4 import BeautifulSoup
 from random import randint
-import wget
 
 class Choice(object):
     def __init__(self, name=None, url=None, rating=None, img_url = None, categories=None,
@@ -48,13 +47,28 @@ class Choice(object):
             data["thumb_url"] = self.img_url
         return data
 
-#thanks quantumSoup and Rufflewind for saving me 5 minutes http://stackoverflow.com/questions/3431825/generating-a-md5-checksum-of-a-file
-def md5(fname):
-    hash_ = hashlib.md5()
-    with open(fname, "rb") as f:
-        for chunk in iter(lambda: f.read(4096, b""):
-                hash_.update(chunk)
-        return hash_.hexdigest()
+class FileExists(Exception):
+    x = 0
+
+#returns the file list without the md5 hashes
+def get_filelist():
+    with open("filelist.txt", "r") as f:
+        rawlist = (f.read()).split()
+        x = 0
+        filelist = []
+        while x < len(rawlist):
+            if x%2==0:
+                filelist.append(rawlist[x])
+            x+=1
+        return filelist
+
+#http://stackoverflow.com/questions/3431825/generating-a-md5-checksum-of-a-file
+def md5(afile, hasher=hashlib.md5(), blocksize=65536):
+    buf = afile.read(blocksize)
+    while len(buf) > 0:
+        hasher.update(buf)
+        buf = afile.read(blocksize)
+    return binascii.hexlify(hasher.digest())
 
 def split_msg(msg):
     s = msg.partition(" ")
@@ -91,7 +105,7 @@ def post_attachment(txt, cnl, att):
     response = requests.post("https://slack.com/api/chat.postMessage", params=params)
     print response.content
 
-def post_snippet(cnl, content, fn, title):
+def upload_file(cnl, content, fn, title):
     files = {"file": content}
     channel = []
     channel.append(cnl)
@@ -151,6 +165,7 @@ def get_pricing(term, indices=[0]):
         if (i/10) not in start_values.keys():
             start_values[i/10] = []
         start_values[i/10].append(i%10)
+    #location of poly is hardcoded
     url = "http://www.yelp.com/search?find_desc={0}&find_loc=6+Metrotech+Ctr,+Brooklyn,+NY&start={1}"
     pricing_values = []
     for i in sorted(start_values.keys()):
@@ -189,7 +204,47 @@ def build_fr_term(term, result_numbers=[0]):
             return result[0]
         return result
 
+#to add: auto extraction/unzipping & recursive directory exploration, bulk analysis when ctfmode, stat, all the tools at the top
+def analyze(sc, data):
+    """usage: !analyze <filename>. Gives useful data about a binary file"""
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            filename = data["data"]
+            if filename in get_filelist():
+                outstring = ""
+                file_out = check_output(["file", filename])
+                oustring += file_out + "\n---------------------------\n"
+                filetype = file_out[len(filename)+2:file_out.find(",")]
+                stat_out = check_output(["stat", filename])
+                outstring = stat_out + "\n"
+                send_msg(outstring, channel)
+            else:
+                send_msg("File does not exist", channel)
+        
+            
+def rename(sc, data):
+    """usage: !rename <filename> <new name>. Renames a file"""
+    if type(data)==type({}):
+        channel = data["channel"]
+        filelist = get_filelist()
+        rawlist = open("filelist.txt", "r").read().split()
+        params = data["data"].split()
+        if params[0] in filelist and len(params)==2:
+            os.rename(params[0], params[1])
+            f = open("filelist.txt", "w")
+            for raw in rawlist:
+                if raw == params[0]:
+                    f.write(params[1] + "\n")
+                else:
+                    f.write(raw + "\n")
+            send_msg("File sucessfully renamed to " + params[1], channel)
+        elif len(params)==2:
+            send_msg("Invalid parameters")
+        else:
+            send_msg("File does not exist")
 
+#to add: pull down all challenges on a CTF page, add trello integration
 def bin(sc, data):
     """usage: !bin <download link>. For giving files to pwnbot when ctfmode is off"""
     if type(data)==type({}):
@@ -199,34 +254,73 @@ def bin(sc, data):
             print url
             try:
                 r = wget.download(url)
+                md5checksum = hashlib.md5(open(r).read()).hexdigest()
+                rawlist = (open("filelist.txt", "r").read()).split()
+                if md5checksum in rawlist:
+                    raise FileExists()
                 f = open("filelist.txt", "a")
-                f.write(r)
-                md5 = md5(r)
-                f.write(md5)
+                f.write(r + "\n")
+                f.write(md5checksum + "\n")
                 f.close()
                 send_msg("File "+ r + "  downloaded successfully", channel)
+                print "File downloaded successfully"
+            except FileExists:
+                print "File already exists"
+                existing = rawlist[rawlist.index(md5checksum)-1]
+                send_msg("File already exists as " + existing, channel)
+                os.remove(r)
             except:
+                print "couldnt find a downloadable file"
                 send_msg("Couldn't find a downloadable file", channel)
 
+def file_list(sc, data):
+    """usage: !filelist. Lists files."""
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            filelist = get_filelist()
+            output = ""
+            for item in filelist:
+                output += item + "\n"
+            send_msg(output, channel)
+
+def request(sc, data):
+    """usage: !request <filename>. Pwnbot uploads the requested file"""
+    if type(data)==type({}):
+        if "channel" in data.keys():
+            channel = data["channel"]
+            filelist = get_filelist()
+            rqfile = data["data"]
+            if rqfile in filelist:
+                with open(rqfile, "rb") as f:
+                    upload_file(channel, f, rqfile, rqfile)
+                    print "File uploaded"
+            else:
+                print "File not found"
+                send_msg("Could not find file", channel)
+
 def delete(sc, data):
+    """usage: !delete <filename>. For deleting files that slackbot has downloaded"""
     if type(data)==type({}):
         if "channel" in data.keys():
             channel = data["channel"]
             f = open("filelist.txt", "r")
-            s = f.read()
+            slist = (f.read()).split()
             f.close()
-            if data["data"] in s:
+            if data["data"] in slist:
                 f = open("filelist.txt", "w")
-                slist = s.split()
                 md5flag = False
                 for fil in slist:
                     if fil != data["data"] and md5flag == False:
-                        f.write(fil)
-                    else if not md5flag:
+                        f.write(fil + "\n")
+                    elif not md5flag:
                         md5flag = True
                     else:
                         md5flag = False
+                os.remove(data["data"])
+            send_msg("File " + data["data"] + " deleted", channel)
 
+#to add: folder organization by CTF
 def ctfmode(sc, data):
     """ toggle ctfmode which allows creation of public files to pull down files without requiring links"""
     if type(data)==type({}):
@@ -477,7 +571,7 @@ def source(sc, data):
             channel = data["channel"]
             filename = __file__
             with open(filename, "rb") as r:
-                response = post_snippet(channel, r, filename, filename)
+                response = upload_file(channel, r, filename, filename)
                 print response
 
 config = {}
@@ -499,7 +593,7 @@ USERNAME = "PwnBot"
 LOCATION = "6 Metrotech Ctr, Brooklyn, NY"
 COMMANDS = {"!vote": globals()["vote"], "!rsvp": globals()["rsvp"], "!attendees": globals()["attendees"], "!dersvp": globals()["dersvp"],
         "!choices": globals()["choices"], "!help": globals()["help"], "!show_poll": globals()["show_poll"], "!when": globals()["when"],
-        "!recommend": globals()["recommend"], "!source": globals()["source"], "!gif": globals()["gif"], "!ctfmode": globals()["ctfmode"], "!bin": globals()["bin"]}
+        "!recommend": globals()["recommend"], "!source": globals()["source"], "!gif": globals()["gif"], "!ctfmode": globals()["ctfmode"], "!bin": globals()["bin"], "!delete": globals()["delete"], "!file_list": globals()["file_list"], "!request": globals()["request"], "!rename": globals()["rename"], "!analyze": globals()["analyze"]}
 string_types = [type(u""), type("")]
 sc = SlackClient(token)
 yelp = YelpAPI(yck, ycs, ytok, yts)
